@@ -40,6 +40,17 @@ KOMGA_API_KEY=your_komga_api_key
 docker compose up -d --build
 ```
 
+Or pull the pre-built image from GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/leemotheyer/comicreadlistmanager:latest
+docker run -d --name comic-read-list-manager \
+  -p 8080:8080 \
+  -v app-data:/data \
+  --env-file .env \
+  ghcr.io/leemotheyer/comicreadlistmanager:latest
+```
+
 3. Open the app at [http://localhost:8080](http://localhost:8080)
 
 The UI and API run in a single container on port 8080.
