@@ -225,6 +225,9 @@ class ComicVineClient:
             "count_of_issues": item.get("count_of_issues"),
         }
 
+    async def get_all_issues(self, volume_id: int) -> list[dict]:
+        return await self._fetch_all_issues_sorted(volume_id)
+
     async def get_issues(
         self, volume_id: int, offset: int = 0, limit: int = 100
     ) -> dict:
