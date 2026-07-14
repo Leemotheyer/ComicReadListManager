@@ -95,8 +95,13 @@ def _volume_score(
 
     start_year = volume.get("start_year")
     if cover_year and start_year:
-        delta = abs(int(start_year) - cover_year)
-        if delta <= 1:
+        try:
+            delta = abs(int(start_year) - cover_year)
+        except (TypeError, ValueError):
+            delta = None
+        if delta is None:
+            pass
+        elif delta <= 1:
             score += 20
         elif delta <= 3:
             score += 10
