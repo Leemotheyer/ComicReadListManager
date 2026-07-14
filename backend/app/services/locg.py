@@ -34,6 +34,7 @@ class LocgIssue:
     store_date: str | None
     notes: str | None
     href: str | None
+    parse_error: str | None = None
 
 
 @dataclass
@@ -63,15 +64,43 @@ def _normalize_url(url: str) -> str:
     return cleaned.split("?")[0].rstrip("/")
 
 
-def _parse_title(title: str) -> tuple[str, str]:
-    cleaned = title.strip()
-    match = re.match(r"^(.*?)\s+#\s*(\d+(?:\.\d+)?(?:½)?)\s*$", cleaned, re.IGNORECASE)
+def _parse_title_with_hash(title: str) -> tuple[str, str] | None:
+    match = re.match(
+        r"^(.*?)\s+#\s*(\d+(?:\.\d+)?(?:½)?)\s*$", title.strip(), re.IGNORECASE
+    )
     if match:
         return match.group(1).strip(), match.group(2).replace("½", ".5")
-    match = re.match(r"^(.*?)\s+(\d+(?:\.\d+)?(?:½)?)\s*$", cleaned)
+    return None
+
+
+def _parse_title_trailing_number(title: str) -> tuple[str, str] | None:
+    match = re.match(r"^(.*?)\s+(\d+(?:\.\d+)?(?:½)?)\s*$", title.strip())
     if match:
         return match.group(1).strip(), match.group(2).replace("½", ".5")
-    raise LocgError(f"Could not parse issue number from title: {title}")
+    return None
+
+
+def _resolve_series_and_number(
+    title: str,
+    reference_titles: list[str],
+) -> tuple[str, str] | None:
+    """Determine series name and issue number for a row.
+
+    Prefers explicit ``Series #N`` formats. Story titles on collected edition
+    pages (e.g. "The Tower, Part 1" or "The Tower, Finale") often don't carry
+    the real issue number, so the linked issue reference (e.g. "Detective
+    Comics #1058") takes precedence over a bare trailing number in the title.
+    References are only trusted with an explicit ``#`` since their text can
+    contain other digits (dates, page counts).
+    """
+    parsed = _parse_title_with_hash(title)
+    if parsed:
+        return parsed
+    for reference in reference_titles:
+        parsed = _parse_title_with_hash(reference)
+        if parsed:
+            return parsed
+    return _parse_title_trailing_number(title)
 
 
 def _session() -> requests.Session:
@@ -126,7 +155,34 @@ def _story_store_date(copy_el) -> str | None:
         r"([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}|\d{4})",
         text,
     )
+    if match:
+        return match.group(1)
+    # The metadata line may lead with the linked issue (e.g.
+    # "Detective Comics #1058 · Mar 2022 · Story"), so also look for a
+    # date anywhere in the text. Avoid matching digits that belong to an
+    # issue number like "#1058".
+    match = re.search(
+        r"([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+(?:19|20)\d{2}"
+        r"|[A-Za-z]{3,9}\.?\s+(?:19|20)\d{2}"
+        r"|(?<![#\d])(?:19|20)\d{2}(?!\d))",
+        text,
+    )
     return match.group(1) if match else None
+
+
+def _reference_titles(li) -> list[str]:
+    """Collect linked issue references inside a row (e.g. "Detective Comics #1058")."""
+    references: list[str] = []
+    for link in li.select("a[href*='/comic/']"):
+        text = link.get_text(" ", strip=True)
+        if text and text not in references:
+            references.append(text)
+        img = link.find("img")
+        if img:
+            alt = (img.get("alt") or "").strip()
+            if alt and alt not in references:
+                references.append(alt)
+    return references
 
 
 def _issue_from_list_row(
@@ -148,7 +204,13 @@ def _issue_from_list_row(
     if not title_el:
         return None
     title = title_el.get_text(strip=True)
-    series, issue_number = _parse_title(title)
+    parsed = _resolve_series_and_number(title, _reference_titles(li))
+    parse_error: str | None = None
+    if parsed:
+        series, issue_number = parsed
+    else:
+        series, issue_number = title, ""
+        parse_error = f"Could not parse issue number from title: {title}"
     publisher_el = li.select_one(".publisher")
     publisher = (
         publisher_el.get_text(strip=True)
@@ -180,6 +242,7 @@ def _issue_from_list_row(
         store_date=store_date,
         notes=notes or None,
         href=href_val,
+        parse_error=parse_error,
     )
 
 

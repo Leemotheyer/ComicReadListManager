@@ -160,6 +160,16 @@ async def match_locg_issue(
     search_volumes: Callable[[str], Awaitable[list[dict]]] | None = None,
     get_volume_issues: Callable[[int], Awaitable[list[dict]]] | None = None,
 ) -> tuple[str, ComicVineMatch | None, list[ComicVineMatch], str | None]:
+    if issue.parse_error:
+        return "failed", None, [], issue.parse_error
+    if not issue.issue_number:
+        return (
+            "failed",
+            None,
+            [],
+            f"Could not determine issue number for {issue.title}",
+        )
+
     cover_year = _year_from_store_date(issue.store_date)
     try:
         volumes = (
