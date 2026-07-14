@@ -121,6 +121,15 @@ class ComicVineClient:
         except ValueError:
             return None
 
+    @staticmethod
+    def _start_year(value) -> int | None:
+        # ComicVine returns start_year as a string and marks uncertain
+        # years with a trailing "?" (e.g. "1950?").
+        if value is None:
+            return None
+        match = re.search(r"(?:19|20)\d{2}", str(value))
+        return int(match.group(0)) if match else None
+
     async def search_volumes(self, query: str) -> list[dict]:
         data = await self._request(
             "search",
@@ -138,7 +147,7 @@ class ComicVineClient:
                 {
                     "id": item["id"],
                     "name": item["name"],
-                    "start_year": item.get("start_year"),
+                    "start_year": self._start_year(item.get("start_year")),
                     "publisher": self._publisher_name(item.get("publisher")),
                     "count_of_issues": item.get("count_of_issues"),
                     "deck": item.get("deck"),
@@ -157,7 +166,9 @@ class ComicVineClient:
             "cover_date": item.get("cover_date"),
             "volume_id": vol.get("id") or volume_id,
             "volume_name": vol.get("name") or volume["name"],
-            "volume_start_year": vol.get("start_year") or volume.get("start_year"),
+            "volume_start_year": ComicVineClient._start_year(
+                vol.get("start_year") or volume.get("start_year")
+            ),
             "publisher": volume.get("publisher"),
             "image_url": ComicVineClient._image_url(item.get("image")),
         }
@@ -209,7 +220,7 @@ class ComicVineClient:
         return {
             "id": item["id"],
             "name": item["name"],
-            "start_year": item.get("start_year"),
+            "start_year": self._start_year(item.get("start_year")),
             "publisher": self._publisher_name(item.get("publisher")),
             "count_of_issues": item.get("count_of_issues"),
         }
@@ -248,7 +259,7 @@ class ComicVineClient:
             "cover_date": item.get("cover_date"),
             "volume_id": vol.get("id"),
             "volume_name": vol.get("name"),
-            "volume_start_year": vol.get("start_year"),
+            "volume_start_year": self._start_year(vol.get("start_year")),
             "publisher": publisher,
             "cover_year": self._cover_year(item.get("cover_date")),
             "image_url": self._image_url(item.get("image")),
