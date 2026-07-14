@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from collections.abc import Awaitable, Callable
 
-from app.services.comicvine import ComicVineClient, _issue_sort_key
+from app.services.comicvine import ComicVineClient, _issue_sort_key, comicvine_client
 from app.services.locg import LocgIssue, LocgSource
 
 PUBLISHER_ALIASES = {
@@ -135,8 +135,10 @@ async def _find_issue_in_volume(
     if get_volume_issues:
         issue_rows = await get_volume_issues(volume["id"])
     else:
-        issues_page = await client.get_issues(volume["id"], offset=0, limit=100)
-        issue_rows = issues_page["issues"]
+        # Fetch the volume's complete issue list: long-running series (e.g.
+        # Detective Comics) have far more than one page of issues, and the
+        # target number may fall outside the first page.
+        issue_rows = await client.get_all_issues(volume["id"])
     matched_row = None
     for row in issue_rows:
         if _issue_numbers_match(row["issue_number"], issue.issue_number):
@@ -233,7 +235,9 @@ async def preview_locg_import(
     locg_source: LocgSource,
     existing_issue_ids: set[int] | None = None,
 ) -> dict:
-    client = ComicVineClient()
+    # Reuse the shared client so its response cache persists across previews;
+    # fetching a long volume's full issue list is many rate-limited requests.
+    client = comicvine_client
     volume_search_cache: dict[str, list[dict]] = {}
     volume_issues_cache: dict[int, list[dict]] = {}
     items: list[dict] = []
@@ -251,8 +255,7 @@ async def preview_locg_import(
 
     async def cached_volume_issues(volume_id: int) -> list[dict]:
         if volume_id not in volume_issues_cache:
-            page = await client.get_issues(volume_id, offset=0, limit=100)
-            volume_issues_cache[volume_id] = page["issues"]
+            volume_issues_cache[volume_id] = await client.get_all_issues(volume_id)
         return volume_issues_cache[volume_id]
 
     for index, issue in enumerate(locg_source.items):
