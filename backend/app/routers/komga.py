@@ -7,7 +7,7 @@ from app.schemas import (
     KomgaVolumeMatchRequest,
     KomgaVolumeMatchResponse,
 )
-from app.services.komga import komga_client
+from app.services.komga import format_komga_error, komga_client
 
 router = APIRouter(prefix="/api/komga", tags=["komga"])
 
@@ -18,7 +18,7 @@ def _handle_komga_error(exc: Exception) -> HTTPException:
     if isinstance(exc, httpx.HTTPStatusError):
         return HTTPException(
             status_code=502,
-            detail=f"Komga API error: {exc.response.status_code}",
+            detail=format_komga_error(exc),
         )
     raise exc
 

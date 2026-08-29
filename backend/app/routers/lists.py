@@ -34,7 +34,7 @@ from app.services.gap_detection import detect_volume_gaps, serialize_tags
 from app.services.kapowarr import kapowarr_client
 from app.services.kapowarr_preview import enrich_kapowarr_items
 from app.services.sync_jobs import sync_job_manager
-from app.services.komga import komga_client
+from app.services.komga import format_komga_error, komga_client
 from app.config import settings as env_settings
 
 router = APIRouter(prefix="/api/lists", tags=["lists"])
@@ -382,7 +382,7 @@ async def komga_preview(list_id: int, db: Session = Depends(get_db)):
     except httpx.HTTPStatusError as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Komga API error: {exc.response.status_code}",
+            detail=format_komga_error(exc),
         ) from exc
 
     return KomgaPreviewResponse(**preview)
@@ -418,7 +418,7 @@ async def komga_push(
     except httpx.HTTPStatusError as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Komga API error: {exc.response.status_code}",
+            detail=format_komga_error(exc),
         ) from exc
 
     read_list.last_exported_at = datetime.now(timezone.utc)

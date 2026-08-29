@@ -5,6 +5,8 @@ from typing import Any
 import httpx
 
 from app.models import ReadList
+from app.services.app_settings import SettingsStore
+from app.services.cbl_export import generate_cbl
 from app.services.gap_detection import parse_tags
 
 
@@ -27,8 +29,47 @@ def build_komga_summary(read_list: ReadList) -> str:
         parts.append("Issue notes:\n" + "\n".join(note_lines))
 
     return "\n\n".join(parts).strip()
-from app.services.app_settings import SettingsStore
-from app.services.cbl_export import generate_cbl
+
+
+def _names_match(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return False
+    return left.casefold() == right.casefold()
+
+
+def _dedupe_book_ids(book_ids: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for book_id in book_ids:
+        if book_id not in seen:
+            seen.add(book_id)
+            unique.append(book_id)
+    return unique
+
+
+def format_komga_error(exc: httpx.HTTPStatusError) -> str:
+    status = exc.response.status_code
+    try:
+        body = exc.response.json()
+    except Exception:
+        body = None
+
+    if isinstance(body, dict):
+        if message := body.get("message"):
+            return f"Komga API error ({status}): {message}"
+        if violations := body.get("violations"):
+            parts = [
+                f"{v.get('fieldName', '?')}: {v.get('message', '?')}"
+                for v in violations
+            ]
+            return f"Komga API error ({status}): {'; '.join(parts)}"
+        if detail := body.get("detail"):
+            return f"Komga API error ({status}): {detail}"
+
+    text = exc.response.text.strip()
+    if text:
+        return f"Komga API error ({status}): {text[:500]}"
+    return f"Komga API error ({status})"
 
 
 def _normalize_issue_number(value: str | None) -> str:
@@ -365,7 +406,7 @@ class KomgaClient:
             params={"search": name, "unpaged": "true"},
         )
         content = self._page_content(data)
-        exact = [rl for rl in content if rl.get("name") == name]
+        exact = [rl for rl in content if _names_match(rl.get("name"), name)]
         return exact[0] if exact else None
 
     async def create_read_list(
@@ -466,6 +507,9 @@ class KomgaClient:
             preview["items"], manual_mappings, manual_labels
         )
         unmatched_count = sum(1 for i in resolved_items if not i.get("komga_book_id"))
+        original_book_count = len(book_ids)
+        book_ids = _dedupe_book_ids(book_ids)
+        duplicate_count = original_book_count - len(book_ids)
 
         if not book_ids:
             raise ValueError("No books matched in Komga — match unmatched items or check metadata")
@@ -481,6 +525,8 @@ class KomgaClient:
         existing_id = preview.get("existing_komga_read_list_id")
 
         if existing_id:
+            action = "updated"
+            read_list_id = existing_id
             await self.update_read_list(
                 existing_id,
                 name=name,
@@ -488,21 +534,43 @@ class KomgaClient:
                 book_ids=book_ids,
                 ordered=True,
             )
-            action = "updated"
-            read_list_id = existing_id
         else:
-            created = await self.create_read_list(name, summary, book_ids, ordered=True)
-            action = "created"
-            read_list_id = created.get("id")
+            action, read_list_id = await self._create_or_update_read_list(
+                name, summary, book_ids
+            )
 
         return {
             "action": action,
             "komga_read_list_id": read_list_id,
             "komga_read_list_name": name,
             "books_pushed": len(book_ids),
-            "books_skipped": unmatched_count,
+            "books_skipped": unmatched_count + duplicate_count,
             "items": resolved_items,
         }
+
+    async def _create_or_update_read_list(
+        self,
+        name: str,
+        summary: str,
+        book_ids: list[str],
+    ) -> tuple[str, str | None]:
+        try:
+            created = await self.create_read_list(name, summary, book_ids, ordered=True)
+            return "created", created.get("id")
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 400:
+                raise
+            existing = await self.find_read_list_by_name(name)
+            if not existing:
+                raise
+            await self.update_read_list(
+                existing["id"],
+                name=name,
+                summary=summary,
+                book_ids=book_ids,
+                ordered=True,
+            )
+            return "updated", existing.get("id")
 
 
 komga_client = KomgaClient()
