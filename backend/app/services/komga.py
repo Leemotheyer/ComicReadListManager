@@ -453,27 +453,36 @@ class KomgaClient:
         preview_items: list[dict],
         manual_mappings: dict[int, str] | None = None,
         manual_labels: dict[int, str] | None = None,
+        excluded_ids: set[int] | None = None,
     ) -> tuple[list[str], list[dict]]:
         manual_mappings = manual_mappings or {}
         manual_labels = manual_labels or {}
+        excluded_ids = excluded_ids or set()
         book_ids: list[str] = []
         resolved_items: list[dict] = []
 
         for item in preview_items:
             list_item_id = item["list_item_id"]
-            book_id = manual_mappings.get(list_item_id) or item.get("komga_book_id")
             resolved = dict(item)
 
             if list_item_id in manual_mappings:
+                book_id = manual_mappings[list_item_id]
                 resolved["status"] = "manual"
                 resolved["komga_book_id"] = book_id
                 resolved["message"] = manual_labels.get(
                     list_item_id, "Manually matched"
                 )
-            elif book_id:
+            elif list_item_id in excluded_ids:
+                book_id = None
+                resolved["status"] = "unmatched"
+                resolved["komga_book_id"] = None
+                resolved["message"] = "Auto-match rejected"
+            elif item.get("komga_book_id"):
+                book_id = item["komga_book_id"]
                 resolved["status"] = "matched"
                 resolved["komga_book_id"] = book_id
             else:
+                book_id = None
                 resolved["status"] = "unmatched"
                 resolved["komga_book_id"] = None
 
@@ -501,10 +510,14 @@ class KomgaClient:
         allow_partial: bool = True,
         manual_mappings: dict[int, str] | None = None,
         manual_labels: dict[int, str] | None = None,
+        excluded_ids: set[int] | None = None,
     ) -> dict:
         preview = await self.preview(read_list)
         book_ids, resolved_items = self.resolve_items(
-            preview["items"], manual_mappings, manual_labels
+            preview["items"],
+            manual_mappings,
+            manual_labels,
+            excluded_ids,
         )
         unmatched_count = sum(1 for i in resolved_items if not i.get("komga_book_id"))
         original_book_count = len(book_ids)

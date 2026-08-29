@@ -426,6 +426,26 @@ th {
   flex-wrap: wrap;
 }
 
+.komga-match-current {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.komga-match-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.komga-candidate-current {
+  border-color: var(--accent-color, #3b82f6);
+}
+
+.komga-book-option-current {
+  border-color: var(--accent-color, #3b82f6);
+}
+
 .komga-match-search {
   margin-top: 0.35rem;
   padding: 0.75rem;

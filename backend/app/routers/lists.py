@@ -412,6 +412,7 @@ async def komga_push(
             allow_partial=payload.allow_partial,
             manual_mappings=manual_mappings,
             manual_labels=manual_labels,
+            excluded_ids=set(payload.excluded_list_item_ids),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

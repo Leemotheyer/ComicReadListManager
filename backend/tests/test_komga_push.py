@@ -22,6 +22,40 @@ class KomgaPushHelpersTest(unittest.TestCase):
             ["a", "b", "c"],
         )
 
+    def test_resolve_items_manual_override_replaces_auto_match(self) -> None:
+        preview_items = [
+            {
+                "list_item_id": 1,
+                "komga_book_id": "auto-book",
+                "status": "matched",
+                "message": "Auto match",
+            }
+        ]
+        book_ids, resolved = KomgaClient.resolve_items(
+            preview_items,
+            manual_mappings={1: "manual-book"},
+            manual_labels={1: "Picked manually"},
+        )
+        self.assertEqual(book_ids, ["manual-book"])
+        self.assertEqual(resolved[0]["status"], "manual")
+        self.assertEqual(resolved[0]["komga_book_id"], "manual-book")
+
+    def test_resolve_items_excluded_rejects_auto_match(self) -> None:
+        preview_items = [
+            {
+                "list_item_id": 1,
+                "komga_book_id": "auto-book",
+                "status": "matched",
+            }
+        ]
+        book_ids, resolved = KomgaClient.resolve_items(
+            preview_items,
+            excluded_ids={1},
+        )
+        self.assertEqual(book_ids, [])
+        self.assertEqual(resolved[0]["status"], "unmatched")
+        self.assertIsNone(resolved[0]["komga_book_id"])
+
     def test_format_komga_error_includes_response_message(self) -> None:
         request = httpx.Request("POST", "http://komga/api/v1/readlists")
         response = httpx.Response(

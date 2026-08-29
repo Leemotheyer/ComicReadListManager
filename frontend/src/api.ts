@@ -500,6 +500,7 @@ export const api = {
         komga_book_id: string;
         label?: string;
       }[];
+      excluded_list_item_ids?: number[];
     }
   ) =>
     request<KomgaPushResponse>(`/api/lists/${listId}/komga/push`, {

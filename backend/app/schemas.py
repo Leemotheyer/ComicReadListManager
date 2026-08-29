@@ -278,6 +278,7 @@ class KomgaPreviewResponse(BaseModel):
 class KomgaPushRequest(BaseModel):
     allow_partial: bool = True
     manual_mappings: list[KomgaManualMapping] = []
+    excluded_list_item_ids: list[int] = []
 
 
 class KomgaPushResponse(BaseModel):
