@@ -206,7 +206,7 @@ export interface LocgPreviewItem {
 
 export interface LocgPreview {
   source_url: string;
-  source_type: "community_list" | "collected_edition";
+  source_type: "community_list" | "collected_edition" | "single_issue";
   list_name: string;
   list_description: string | null;
   item_count: number;
