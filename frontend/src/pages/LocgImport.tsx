@@ -20,6 +20,7 @@ const STATUS_LABELS: Record<string, string> = {
 const SOURCE_LABELS: Record<LocgPreview["source_type"], string> = {
   community_list: "Community list",
   collected_edition: "Collected edition",
+  single_issue: "Single issue",
 };
 
 function candidateLabel(candidate: LocgMatchCandidate) {
@@ -262,7 +263,7 @@ export default function LocgImport() {
         <h2>Add issues{list ? ` — ${list.name}` : ""}</h2>
         <AddIssuesNav mode="locg" />
         <p className="muted add-issues-header-desc">
-          Paste a LoCG community list or collected edition URL. Matched issues are appended
+          Paste a LoCG community list or comic URL. Matched issues are appended
           to this list — existing items are kept.
           {existingCount > 0 && (
             <>
@@ -278,7 +279,7 @@ export default function LocgImport() {
         <h2>LoCG URL</h2>
         <div className="form-row">
           <input
-            placeholder="Community list or collected edition URL..."
+            placeholder="Community list or comic URL..."
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && url.trim() && previewMutation.mutate()}
@@ -295,7 +296,7 @@ export default function LocgImport() {
           Community list:{" "}
           <code>leagueofcomicgeeks.com/profile/user/lists/12345/...</code>
           <br />
-          Collected edition:{" "}
+          Collected edition or single issue:{" "}
           <code>leagueofcomicgeeks.com/comic/4413027/invincible-vol-1-new-edition-tp</code>
         </p>
         {previewMutation.error && (
