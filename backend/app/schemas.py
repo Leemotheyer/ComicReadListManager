@@ -213,6 +213,7 @@ class KomgaPreviewItem(BaseModel):
 class KomgaMatchCandidate(BaseModel):
     series_id: str | None = None
     series_title: str | None = None
+    series_year: int | None = None
     book_id: str | None = None
     book_number: str | None = None
     book_title: str | None = None

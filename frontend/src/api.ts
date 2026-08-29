@@ -113,6 +113,7 @@ export interface KapowarrSyncResponse {
 export interface KomgaMatchCandidate {
   series_id: string | null;
   series_title: string | null;
+  series_year: number | null;
   book_id: string | null;
   book_number: string | null;
   book_title: string | null;

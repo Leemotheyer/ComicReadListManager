@@ -126,7 +126,226 @@ def _extract_issue_candidates_from_filename(filename: str) -> list[str]:
     return candidates
 
 
+def _parse_year(value: str | int | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if len(text) >= 4 and text[:4].isdigit():
+        return int(text[:4])
+    return None
+
+
+def _year_from_series_title(title: str | None) -> int | None:
+    if not title:
+        return None
+    match = re.search(r"\((\d{4})\)\s*$", title.strip())
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _series_year_from_komga(series: dict) -> int | None:
+    year = _parse_year(series.get("releaseDate"))
+    if year is not None:
+        return year
+    return _year_from_series_title(series.get("title"))
+
+
+def _issue_numbers_match(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return False
+    return _normalize_issue_number(left) == _normalize_issue_number(right)
+
+
+def _request_series_hints(match_entry: dict) -> set[str]:
+    request = match_entry.get("request") or {}
+    series = request.get("series") or []
+    hints: set[str] = set()
+    for value in series:
+        if isinstance(value, str) and value.strip():
+            hints.add(value.strip())
+    return hints
+
+
+def _score_book_candidate(
+    candidate: dict,
+    *,
+    issue_number: str,
+    volume_year: int | None,
+    cover_year: int | None,
+    request_series: set[str],
+) -> int:
+    book_number = candidate.get("book_number")
+    if not book_number or not _issue_numbers_match(book_number, issue_number):
+        return -1
+
+    score = 10
+    series_year = candidate.get("series_year")
+    series_title = candidate.get("series_title") or ""
+
+    if volume_year is not None:
+        if series_year is None:
+            return -1
+        if series_year != volume_year:
+            return -1
+        score += 200
+    elif series_year is not None:
+        score += 20
+
+    if cover_year is not None and series_year is not None and cover_year == series_year:
+        score += 15
+
+    title_cf = series_title.casefold()
+    for hint in request_series:
+        hint_cf = hint.casefold()
+        if hint_cf == title_cf:
+            score += 40
+        elif volume_year is not None and hint_cf == f"{series_title.split('(')[0].strip().casefold()} ({volume_year})":
+            score += 60
+
+    if volume_year is not None and f"({volume_year})" in series_title:
+        score += 30
+
+    return score
+
+
+def _pick_best_book_id(
+    match_entry: dict,
+    *,
+    issue_number: str,
+    volume_year: int | None,
+    cover_year: int | None,
+    preferred_series_id: str | None = None,
+) -> str | None:
+    candidates = KomgaClient._extract_candidates(match_entry)
+    if not candidates:
+        return None
+
+    request_series = _request_series_hints(match_entry)
+    scored: list[tuple[int, dict]] = []
+
+    for candidate in candidates:
+        if not candidate.get("book_id"):
+            continue
+        if preferred_series_id and candidate.get("series_id") != preferred_series_id:
+            continue
+        score = _score_book_candidate(
+            candidate,
+            issue_number=issue_number,
+            volume_year=volume_year,
+            cover_year=cover_year,
+            request_series=request_series,
+        )
+        if score >= 0:
+            scored.append((score, candidate))
+
+    if not scored:
+        return None
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    best_score = scored[0][0]
+    best = [candidate for score, candidate in scored if score == best_score]
+
+    unique_books = {candidate["book_id"] for candidate in best if candidate.get("book_id")}
+    if len(unique_books) != 1:
+        return None
+
+    return best[0]["book_id"]
+
+
+def _sort_candidates_for_display(
+    candidates: list[dict],
+    *,
+    issue_number: str,
+    volume_year: int | None,
+    cover_year: int | None,
+    request_series: set[str],
+) -> list[dict]:
+    scored: list[tuple[int, dict]] = []
+    for candidate in candidates:
+        if candidate.get("book_id"):
+            score = _score_book_candidate(
+                candidate,
+                issue_number=issue_number,
+                volume_year=volume_year,
+                cover_year=cover_year,
+                request_series=request_series,
+            )
+        else:
+            score = 0
+            if volume_year is not None and candidate.get("series_year") == volume_year:
+                score = 100
+        scored.append((score, candidate))
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [candidate for _, candidate in scored]
+
+
+def _apply_volume_series_consistency(
+    preview_items: list[dict],
+    match_entries: list[dict],
+) -> None:
+    groups: dict[int, list[tuple[dict, dict]]] = {}
+    for item, match_entry in zip(preview_items, match_entries):
+        groups.setdefault(item["cv_volume_id"], []).append((item, match_entry))
+
+    for pairs in groups.values():
+        series_counts: dict[str, int] = {}
+        for item, _ in pairs:
+            book_id = item.get("komga_book_id")
+            if not book_id:
+                continue
+            for candidate in item.get("candidates") or []:
+                if candidate.get("book_id") == book_id and candidate.get("series_id"):
+                    series_id = candidate["series_id"]
+                    series_counts[series_id] = series_counts.get(series_id, 0) + 1
+                    break
+
+        if not series_counts:
+            continue
+
+        preferred_series_id = max(series_counts, key=series_counts.get)
+
+        for item, match_entry in pairs:
+            if item.get("komga_book_id"):
+                continue
+            book_id = _pick_best_book_id(
+                match_entry,
+                issue_number=item["issue_number"],
+                volume_year=item.get("volume_year"),
+                cover_year=item.get("cover_year"),
+                preferred_series_id=preferred_series_id,
+            )
+            if book_id:
+                item["komga_book_id"] = book_id
+                item["status"] = "matched"
+                item["message"] = KomgaClient._match_message(
+                    match_entry,
+                    book_id,
+                    volume_year=item.get("volume_year"),
+                )
+
+
 def _find_book_by_issue_number(books: list[dict], issue_number: str) -> dict | None:
+    target = _normalize_issue_number(issue_number)
+    if not target:
+        return None
+
+    for book in books:
+        if _normalize_issue_number(book.get("number")) == target:
+            return book
+
+    for book in books:
+        filename = book.get("filename") or _book_filename(book)
+        for candidate in _extract_issue_candidates_from_filename(filename):
+            if _normalize_issue_number(candidate) == target:
+                return book
+
+    return None
+
+
     target = _normalize_issue_number(issue_number)
     if not target:
         return None
@@ -215,6 +434,7 @@ class KomgaClient:
                         {
                             "series_id": series_id,
                             "series_title": series_title,
+                            "series_year": _series_year_from_komga(series),
                             "book_id": book_id,
                             "book_number": book.get("number"),
                             "book_title": book.get("title"),
@@ -228,6 +448,7 @@ class KomgaClient:
                         {
                             "series_id": series_id,
                             "series_title": series_title,
+                            "series_year": _series_year_from_komga(series),
                             "book_id": None,
                             "book_number": None,
                             "book_title": None,
@@ -237,27 +458,35 @@ class KomgaClient:
         return candidates
 
     @staticmethod
-    def _first_book_id(match_entry: dict) -> str | None:
-        for candidate in KomgaClient._extract_candidates(match_entry):
-            if candidate.get("book_id"):
-                return candidate["book_id"]
-        return None
-
-    @staticmethod
-    def _match_message(match_entry: dict, book_id: str | None) -> str:
+    def _match_message(
+        match_entry: dict,
+        book_id: str | None,
+        *,
+        volume_year: int | None = None,
+    ) -> str:
         if book_id:
             for candidate in KomgaClient._extract_candidates(match_entry):
                 if candidate.get("book_id") == book_id:
                     title = candidate.get("book_title") or candidate.get("series_title")
+                    series_year = candidate.get("series_year")
                     if title:
+                        if series_year is not None:
+                            return f"Matched: {title} ({series_year})"
                         return f"Matched: {title}"
             return "Matched in Komga library"
         request = match_entry.get("request") or {}
         series = request.get("series") or []
         number = request.get("number") or "?"
         label = series[0] if series else "Unknown series"
-        candidates = KomgaClient._extract_candidates(match_entry)
+        candidates = [
+            c for c in KomgaClient._extract_candidates(match_entry) if c.get("book_id")
+        ]
         if candidates:
+            if volume_year is not None:
+                return (
+                    f"No confident match for {label} ({volume_year}) #{number} "
+                    "— multiple similar series found; pick a candidate below"
+                )
             return f"No exact match for {label} #{number} — pick a candidate below"
         return f"No match for {label} #{number}"
 
@@ -266,15 +495,25 @@ class KomgaClient:
         items = sorted(read_list.items, key=lambda i: i.sort_order)
         read_list_match = match_response.get("readListMatch") or {}
 
-        preview_items = []
-        matched_book_ids: list[str] = []
+        preview_items: list[dict] = []
+        match_entries: list[dict] = []
 
         for idx, item in enumerate(items):
             match_entry = requests[idx] if idx < len(requests) else {}
-            book_id = self._first_book_id(match_entry)
-            candidates = self._extract_candidates(match_entry)
-            if book_id:
-                matched_book_ids.append(book_id)
+            request_series = _request_series_hints(match_entry)
+            candidates = _sort_candidates_for_display(
+                self._extract_candidates(match_entry),
+                issue_number=item.issue_number,
+                volume_year=item.volume_year,
+                cover_year=item.cover_year,
+                request_series=request_series,
+            )
+            book_id = _pick_best_book_id(
+                match_entry,
+                issue_number=item.issue_number,
+                volume_year=item.volume_year,
+                cover_year=item.cover_year,
+            )
 
             preview_items.append(
                 {
@@ -283,12 +522,26 @@ class KomgaClient:
                     "series": item.series,
                     "issue_number": item.issue_number,
                     "volume_year": item.volume_year,
+                    "cover_year": item.cover_year,
                     "status": "matched" if book_id else "unmatched",
                     "komga_book_id": book_id,
-                    "message": self._match_message(match_entry, book_id),
+                    "message": self._match_message(
+                        match_entry,
+                        book_id,
+                        volume_year=item.volume_year,
+                    ),
                     "candidates": candidates,
                 }
             )
+            match_entries.append(match_entry)
+
+        _apply_volume_series_consistency(preview_items, match_entries)
+
+        matched_book_ids = [
+            item["komga_book_id"]
+            for item in preview_items
+            if item.get("komga_book_id")
+        ]
 
         list_name = read_list_match.get("name") or read_list.name
         list_error = read_list_match.get("errorCode") or match_response.get("errorCode")

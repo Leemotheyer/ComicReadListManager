@@ -7,6 +7,9 @@ from app.services.komga import (
     KomgaClient,
     _dedupe_book_ids,
     _names_match,
+    _pick_best_book_id,
+    _series_year_from_komga,
+    _year_from_series_title,
     format_komga_error,
 )
 
@@ -55,6 +58,165 @@ class KomgaPushHelpersTest(unittest.TestCase):
         self.assertEqual(book_ids, [])
         self.assertEqual(resolved[0]["status"], "unmatched")
         self.assertIsNone(resolved[0]["komga_book_id"])
+
+    def test_year_from_series_title(self) -> None:
+        self.assertEqual(_year_from_series_title("Hawkeye (2012)"), 2012)
+        self.assertIsNone(_year_from_series_title("Hawkeye"))
+
+    def test_series_year_from_komga_prefers_release_date(self) -> None:
+        year = _series_year_from_komga(
+            {"releaseDate": "2017-03-15", "title": "Hawkeye (2012)"}
+        )
+        self.assertEqual(year, 2017)
+
+    def test_pick_best_book_id_matches_volume_year(self) -> None:
+        match_entry = {
+            "request": {"series": ["Hawkeye", "Hawkeye (2012)"], "number": "1"},
+            "matches": [
+                {
+                    "series": {
+                        "seriesId": "series-2012",
+                        "title": "Hawkeye",
+                        "releaseDate": "2012-08-01",
+                    },
+                    "books": [
+                        {"bookId": "book-2012", "number": "1", "title": "Hawkeye #1"}
+                    ],
+                },
+                {
+                    "series": {
+                        "seriesId": "series-2017",
+                        "title": "Hawkeye",
+                        "releaseDate": "2017-03-01",
+                    },
+                    "books": [
+                        {"bookId": "book-2017", "number": "1", "title": "Hawkeye #1"}
+                    ],
+                },
+            ],
+        }
+        book_id = _pick_best_book_id(
+            match_entry,
+            issue_number="1",
+            volume_year=2012,
+            cover_year=None,
+        )
+        self.assertEqual(book_id, "book-2012")
+
+    def test_pick_best_book_id_rejects_wrong_issue_number(self) -> None:
+        match_entry = {
+            "request": {"series": ["Hawkeye"], "number": "2"},
+            "matches": [
+                {
+                    "series": {
+                        "seriesId": "series-2012",
+                        "title": "Hawkeye",
+                        "releaseDate": "2012-08-01",
+                    },
+                    "books": [
+                        {"bookId": "book-2012", "number": "1", "title": "Hawkeye #1"}
+                    ],
+                }
+            ],
+        }
+        book_id = _pick_best_book_id(
+            match_entry,
+            issue_number="2",
+            volume_year=2012,
+            cover_year=None,
+        )
+        self.assertIsNone(book_id)
+
+    def test_pick_best_book_id_ambiguous_without_volume_year(self) -> None:
+        match_entry = {
+            "request": {"series": ["Hawkeye"], "number": "1"},
+            "matches": [
+                {
+                    "series": {
+                        "seriesId": "series-2012",
+                        "title": "Hawkeye",
+                        "releaseDate": "2012-08-01",
+                    },
+                    "books": [
+                        {"bookId": "book-2012", "number": "1", "title": "Hawkeye #1"}
+                    ],
+                },
+                {
+                    "series": {
+                        "seriesId": "series-2017",
+                        "title": "Hawkeye",
+                        "releaseDate": "2017-03-01",
+                    },
+                    "books": [
+                        {"bookId": "book-2017", "number": "1", "title": "Hawkeye #1"}
+                    ],
+                },
+            ],
+        }
+        book_id = _pick_best_book_id(
+            match_entry,
+            issue_number="1",
+            volume_year=None,
+            cover_year=None,
+        )
+        self.assertIsNone(book_id)
+
+    def test_classify_list_uses_volume_year_for_same_titled_series(self) -> None:
+        client = KomgaClient()
+        read_list = unittest.mock.MagicMock()
+        read_list.name = "Test"
+        item = unittest.mock.MagicMock()
+        item.id = 1
+        item.cv_volume_id = 10
+        item.series = "Hawkeye"
+        item.issue_number = "1"
+        item.volume_year = 2017
+        item.cover_year = None
+        item.sort_order = 0
+        read_list.items = [item]
+
+        match_response = {
+            "readListMatch": {"name": "Test"},
+            "requests": [
+                {
+                    "request": {"series": ["Hawkeye", "Hawkeye (2017)"], "number": "1"},
+                    "matches": [
+                        {
+                            "series": {
+                                "seriesId": "series-2012",
+                                "title": "Hawkeye",
+                                "releaseDate": "2012-08-01",
+                            },
+                            "books": [
+                                {
+                                    "bookId": "book-2012",
+                                    "number": "1",
+                                    "title": "Hawkeye #1",
+                                }
+                            ],
+                        },
+                        {
+                            "series": {
+                                "seriesId": "series-2017",
+                                "title": "Hawkeye",
+                                "releaseDate": "2017-03-01",
+                            },
+                            "books": [
+                                {
+                                    "bookId": "book-2017",
+                                    "number": "1",
+                                    "title": "Hawkeye #1",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+
+        result = client.classify_list(read_list, match_response)
+        self.assertEqual(result["items"][0]["komga_book_id"], "book-2017")
+        self.assertEqual(result["matched_count"], 1)
 
     def test_format_komga_error_includes_response_message(self) -> None:
         request = httpx.Request("POST", "http://komga/api/v1/readlists")

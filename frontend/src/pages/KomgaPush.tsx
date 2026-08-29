@@ -81,9 +81,13 @@ function candidateLabel(candidate: KomgaMatchCandidate) {
   if (candidate.book_id) {
     const num = candidate.book_number ? `#${candidate.book_number}` : "";
     const title = candidate.book_title || candidate.series_title || "Book";
-    return `${title} ${num}`.trim();
+    const year =
+      candidate.series_year != null ? ` (${candidate.series_year})` : "";
+    return `${title} ${num}${year}`.trim();
   }
-  return candidate.series_title || "Series match";
+  const year =
+    candidate.series_year != null ? ` (${candidate.series_year})` : "";
+  return `${candidate.series_title || "Series match"}${year}`;
 }
 
 function groupByVolume(items: KomgaPreviewItem[]): VolumeGroup[] {
@@ -417,8 +421,17 @@ function VolumeMatchPanel({
         }
       }
     }
-    return result;
-  }, [unmatchedItems]);
+    return result.sort((a, b) => {
+      const aYear = a.series_year ?? -1;
+      const bYear = b.series_year ?? -1;
+      if (group.volumeYear != null) {
+        const aMatch = aYear === group.volumeYear ? 1 : 0;
+        const bMatch = bYear === group.volumeYear ? 1 : 0;
+        if (aMatch !== bMatch) return bMatch - aMatch;
+      }
+      return bYear - aYear;
+    });
+  }, [unmatchedItems, group.volumeYear]);
 
   const matchMutation = useMutation({
     mutationFn: (series: KomgaSeriesResult) =>
