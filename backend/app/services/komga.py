@@ -218,16 +218,19 @@ def _pick_best_book_id(
     volume_year: int | None,
     cover_year: int | None,
     preferred_series_id: str | None = None,
+    used_book_ids: set[str] | None = None,
 ) -> str | None:
     candidates = KomgaClient._extract_candidates(match_entry)
     if not candidates:
         return None
 
+    used_book_ids = used_book_ids or set()
     request_series = _request_series_hints(match_entry)
     scored: list[tuple[int, dict]] = []
 
     for candidate in candidates:
-        if not candidate.get("book_id"):
+        book_id = candidate.get("book_id")
+        if not book_id or book_id in used_book_ids:
             continue
         if preferred_series_id and candidate.get("series_id") != preferred_series_id:
             continue
@@ -245,14 +248,40 @@ def _pick_best_book_id(
         return None
 
     scored.sort(key=lambda pair: pair[0], reverse=True)
-    best_score = scored[0][0]
-    best = [candidate for score, candidate in scored if score == best_score]
+    for best_score in sorted({score for score, _ in scored}, reverse=True):
+        tier = [candidate for score, candidate in scored if score == best_score]
+        available = [
+            candidate
+            for candidate in tier
+            if candidate.get("book_id") and candidate["book_id"] not in used_book_ids
+        ]
+        unique_books = {candidate["book_id"] for candidate in available}
+        if len(unique_books) == 1:
+            return available[0]["book_id"]
+        if len(unique_books) > 1:
+            continue
 
-    unique_books = {candidate["book_id"] for candidate in best if candidate.get("book_id")}
-    if len(unique_books) != 1:
-        return None
+    return None
 
-    return best[0]["book_id"]
+
+def _book_id_blocked_as_duplicate(
+    match_entry: dict,
+    *,
+    issue_number: str,
+    volume_year: int | None,
+    cover_year: int | None,
+    used_book_ids: set[str],
+) -> bool:
+    if not used_book_ids:
+        return False
+    best_without_reserve = _pick_best_book_id(
+        match_entry,
+        issue_number=issue_number,
+        volume_year=volume_year,
+        cover_year=cover_year,
+        used_book_ids=set(),
+    )
+    return bool(best_without_reserve and best_without_reserve in used_book_ids)
 
 
 def _sort_candidates_for_display(
@@ -286,6 +315,7 @@ def _sort_candidates_for_display(
 def _apply_volume_series_consistency(
     preview_items: list[dict],
     match_entries: list[dict],
+    used_book_ids: set[str],
 ) -> None:
     groups: dict[int, list[tuple[dict, dict]]] = {}
     for item, match_entry in zip(preview_items, match_entries):
@@ -317,6 +347,7 @@ def _apply_volume_series_consistency(
                 volume_year=item.get("volume_year"),
                 cover_year=item.get("cover_year"),
                 preferred_series_id=preferred_series_id,
+                used_book_ids=used_book_ids,
             )
             if book_id:
                 item["komga_book_id"] = book_id
@@ -326,6 +357,45 @@ def _apply_volume_series_consistency(
                     book_id,
                     volume_year=item.get("volume_year"),
                 )
+                used_book_ids.add(book_id)
+
+
+def _resolve_duplicate_matches(
+    preview_items: list[dict],
+    match_entries: list[dict],
+) -> None:
+    used_book_ids: set[str] = set()
+
+    for item, match_entry in zip(preview_items, match_entries):
+        book_id = item.get("komga_book_id")
+        if not book_id:
+            continue
+
+        if book_id in used_book_ids:
+            alternate = _pick_best_book_id(
+                match_entry,
+                issue_number=item["issue_number"],
+                volume_year=item.get("volume_year"),
+                cover_year=item.get("cover_year"),
+                used_book_ids=used_book_ids,
+            )
+            if alternate:
+                item["komga_book_id"] = alternate
+                item["status"] = "matched"
+                item["message"] = KomgaClient._match_message(
+                    match_entry,
+                    alternate,
+                    volume_year=item.get("volume_year"),
+                )
+                used_book_ids.add(alternate)
+            else:
+                item["komga_book_id"] = None
+                item["status"] = "unmatched"
+                item["message"] = (
+                    "Komga book already matched to another issue in this list"
+                )
+        else:
+            used_book_ids.add(book_id)
 
 
 def _find_book_by_issue_number(books: list[dict], issue_number: str) -> dict | None:
@@ -497,6 +567,7 @@ class KomgaClient:
 
         preview_items: list[dict] = []
         match_entries: list[dict] = []
+        used_book_ids: set[str] = set()
 
         for idx, item in enumerate(items):
             match_entry = requests[idx] if idx < len(requests) else {}
@@ -513,7 +584,31 @@ class KomgaClient:
                 issue_number=item.issue_number,
                 volume_year=item.volume_year,
                 cover_year=item.cover_year,
+                used_book_ids=used_book_ids,
             )
+            if book_id:
+                used_book_ids.add(book_id)
+
+            if book_id:
+                message = self._match_message(
+                    match_entry,
+                    book_id,
+                    volume_year=item.volume_year,
+                )
+            elif _book_id_blocked_as_duplicate(
+                match_entry,
+                issue_number=item.issue_number,
+                volume_year=item.volume_year,
+                cover_year=item.cover_year,
+                used_book_ids=used_book_ids,
+            ):
+                message = "Komga book already matched to another issue in this list"
+            else:
+                message = self._match_message(
+                    match_entry,
+                    None,
+                    volume_year=item.volume_year,
+                )
 
             preview_items.append(
                 {
@@ -525,17 +620,14 @@ class KomgaClient:
                     "cover_year": item.cover_year,
                     "status": "matched" if book_id else "unmatched",
                     "komga_book_id": book_id,
-                    "message": self._match_message(
-                        match_entry,
-                        book_id,
-                        volume_year=item.volume_year,
-                    ),
+                    "message": message,
                     "candidates": candidates,
                 }
             )
             match_entries.append(match_entry)
 
-        _apply_volume_series_consistency(preview_items, match_entries)
+        _apply_volume_series_consistency(preview_items, match_entries, used_book_ids)
+        _resolve_duplicate_matches(preview_items, match_entries)
 
         matched_book_ids = [
             item["komga_book_id"]

@@ -218,6 +218,55 @@ class KomgaPushHelpersTest(unittest.TestCase):
         self.assertEqual(result["items"][0]["komga_book_id"], "book-2017")
         self.assertEqual(result["matched_count"], 1)
 
+    def test_classify_list_avoids_duplicate_komga_books(self) -> None:
+        client = KomgaClient()
+        read_list = unittest.mock.MagicMock()
+        read_list.name = "Test"
+
+        def make_item(item_id: int, issue_number: str) -> unittest.mock.MagicMock:
+            item = unittest.mock.MagicMock()
+            item.id = item_id
+            item.cv_volume_id = 10
+            item.series = "Hawkeye"
+            item.issue_number = issue_number
+            item.volume_year = 2012
+            item.cover_year = None
+            item.sort_order = item_id
+            return item
+
+        read_list.items = [make_item(1, "1"), make_item(2, "1")]
+
+        match_entry = {
+            "request": {"series": ["Hawkeye", "Hawkeye (2012)"], "number": "1"},
+            "matches": [
+                {
+                    "series": {
+                        "seriesId": "series-2012",
+                        "title": "Hawkeye",
+                        "releaseDate": "2012-08-01",
+                    },
+                    "books": [
+                        {"bookId": "book-2012", "number": "1", "title": "Hawkeye #1"}
+                    ],
+                }
+            ],
+        }
+        match_response = {
+            "readListMatch": {"name": "Test"},
+            "requests": [match_entry, match_entry],
+        }
+
+        result = client.classify_list(read_list, match_response)
+        matched_ids = [
+            item["komga_book_id"]
+            for item in result["items"]
+            if item.get("komga_book_id")
+        ]
+        self.assertEqual(matched_ids, ["book-2012"])
+        self.assertIsNone(result["items"][1]["komga_book_id"])
+        self.assertEqual(result["items"][1]["status"], "unmatched")
+        self.assertIn("already matched", result["items"][1]["message"])
+
     def test_format_komga_error_includes_response_message(self) -> None:
         request = httpx.Request("POST", "http://komga/api/v1/readlists")
         response = httpx.Response(
